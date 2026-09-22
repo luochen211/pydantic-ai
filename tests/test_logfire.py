@@ -43,6 +43,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.output import PromptedOutput, TextOutput
 from pydantic_ai.run import AgentRunResult
 from pydantic_ai.tools import DeferredToolRequests, RunContext
+from pydantic_ai.toolsets._dynamic import DynamicToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 from pydantic_ai.toolsets.function import FunctionToolset
 from pydantic_ai.toolsets.wrapper import WrapperToolset
@@ -3938,6 +3939,60 @@ def test_agent_run_span_records_capabilities_and_toolsets(
         'pydantic_ai.agent._AgentFunctionToolset:<agent>',
         'pydantic_ai.toolsets.function.FunctionToolset:custom-tools',
     }
+
+
+@pytest.mark.skipif(not logfire_installed, reason='logfire not installed')
+def test_agent_run_span_records_resolved_dynamic_toolset(capfire: CaptureLogfire) -> None:
+    resolved_toolset = FunctionToolset(id='resolved-tools')
+
+    @resolved_toolset.tool_plain
+    def answer() -> str:
+        return 'done'
+
+    agent = Agent(
+        model=TestModel(),
+        capabilities=[Instrumentation(settings=InstrumentationSettings())],
+        toolsets=[DynamicToolset(lambda _ctx: resolved_toolset)],
+    )
+    agent.run_sync('Hello')
+
+    agent_run_attrs = next(
+        span['attributes']
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span['attributes'].get('gen_ai.operation.name') == 'invoke_agent'
+        and span['attributes'].get('logfire.span_type') != 'pending_span'
+    )
+    assert 'pydantic_ai.toolsets.function.FunctionToolset:resolved-tools' in agent_run_attrs['pydantic_ai.toolset.ids']
+    assert not any('DynamicToolset' in item for item in agent_run_attrs['pydantic_ai.toolset.ids'])
+
+
+@pytest.mark.skipif(not logfire_installed, reason='logfire not installed')
+def test_agent_run_span_omits_explicit_ids_without_content(capfire: CaptureLogfire) -> None:
+    @dataclass
+    class SensitiveCapability(AbstractCapability[Any]):
+        id: str | None = 'signed-secret-token'
+
+    toolset = FunctionToolset(id='https://example.com/signed/tool-token')
+    agent = Agent(
+        model=TestModel(),
+        capabilities=[
+            Instrumentation(settings=InstrumentationSettings(include_content=False)),
+            SensitiveCapability(),
+        ],
+        toolsets=[toolset],
+    )
+    agent.run_sync('Hello')
+
+    agent_run_attrs = next(
+        span['attributes']
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span['attributes'].get('gen_ai.operation.name') == 'invoke_agent'
+        and span['attributes'].get('logfire.span_type') != 'pending_span'
+    )
+    assert all('secret-token' not in item for item in agent_run_attrs['pydantic_ai.capability.ids'])
+    assert all('tool-token' not in item for item in agent_run_attrs['pydantic_ai.toolset.ids'])
+    assert any('SensitiveCapability' in item for item in agent_run_attrs['pydantic_ai.capability.ids'])
+    assert 'pydantic_ai.toolsets.function.FunctionToolset' in agent_run_attrs['pydantic_ai.toolset.ids']
 
 
 @pytest.mark.skipif(not logfire_installed, reason='logfire not installed')

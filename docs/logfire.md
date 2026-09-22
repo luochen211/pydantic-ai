@@ -273,9 +273,9 @@ Each metric point carries the `gen_ai.provider.name` (and legacy `gen_ai.system`
 
 ### Run composition attributes
 
-Agent run spans include `pydantic_ai.capability.ids` and `pydantic_ai.toolset.ids`, which list the capabilities and leaf toolsets that make up the run. Each entry contains the component's fully qualified Python type and, when present, its explicit `id`, so traces can distinguish framework components from user-defined ones and separate differently configured instances of the same type.
+Agent run spans include `pydantic_ai.capability.ids` and `pydantic_ai.toolset.ids`, which list the capabilities and resolved leaf toolsets that make up the run. Each entry contains the component's fully qualified Python type. When `include_content=True`, an explicit component `id` is appended so traces can distinguish differently configured instances of the same type. With `include_content=False`, explicit IDs are omitted because user-provided IDs may contain URLs, tokens, or other sensitive values.
 
-These attributes can include the names of user-defined capability and toolset classes. They describe the application code that produced the trace and are recorded regardless of `include_content`; configure your OpenTelemetry exporter if class names should not leave your environment.
+These attributes can still include the names of user-defined capability and toolset classes when `include_content=False`. They describe the application code that produced the trace; configure your OpenTelemetry exporter if class names should not leave your environment.
 
 ### Aggregated usage attribute names
 

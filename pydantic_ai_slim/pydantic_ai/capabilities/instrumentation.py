@@ -69,11 +69,20 @@ def _default_settings() -> InstrumentationSettings:
     return InstrumentationSettings()
 
 
-def _component_id(component: AbstractCapability[Any] | AbstractToolset[Any]) -> str:
+def _component_id(component: AbstractCapability[Any] | AbstractToolset[Any], *, include_explicit_id: bool) -> str:
     """Return a stable, queryable identity for a capability or toolset."""
     component_type = type(component)
     type_name = f'{component_type.__module__}.{component_type.__qualname__}'
-    return f'{type_name}:{component.id}' if component.id is not None else type_name
+    return f'{type_name}:{component.id}' if include_explicit_id and component.id is not None else type_name
+
+
+def _toolset_ids(ctx: RunContext[Any], *, include_explicit_ids: bool) -> list[str]:
+    """Return the currently resolved leaf toolsets for a run."""
+    if ctx.tool_manager is None:  # pragma: no cover
+        return []
+    toolsets: list[AbstractToolset[Any]] = []
+    ctx.tool_manager.toolset.apply(toolsets.append)
+    return [_component_id(toolset, include_explicit_id=include_explicit_ids) for toolset in toolsets]
 
 
 @dataclass
@@ -224,11 +233,9 @@ class Instrumentation(AbstractCapability[Any]):
             'logfire.msg': f'{agent_name} run',
         }
 
-        span_attributes['pydantic_ai.capability.ids'] = [_component_id(cap) for cap in ctx.capabilities.values()]
-        if ctx.tool_manager is not None:  # pragma: no branch
-            toolsets: list[AbstractToolset[Any]] = []
-            ctx.tool_manager.toolset.apply(toolsets.append)
-            span_attributes['pydantic_ai.toolset.ids'] = [_component_id(toolset) for toolset in toolsets]
+        span_attributes['pydantic_ai.capability.ids'] = [
+            _component_id(cap, include_explicit_id=settings.include_content) for cap in ctx.capabilities.values()
+        ]
 
         if ctx.agent is not None:  # pragma: no branch
             rendered = ctx.agent.render_description(ctx.deps)
@@ -269,6 +276,11 @@ class Instrumentation(AbstractCapability[Any]):
             finally:
                 _otel_detach(token)
                 if span.is_recording():
+                    # Dynamic toolsets may resolve per step, so inspect the live tree after the run.
+                    span.set_attribute(
+                        'pydantic_ai.toolset.ids',
+                        _toolset_ids(ctx, include_explicit_ids=settings.include_content),
+                    )
                     # Get current messages and metadata from the result (which holds the up-to-date state).
                     # ctx.messages/ctx.metadata may be stale because the run state is mutated during execution.
                     if result is not None:
